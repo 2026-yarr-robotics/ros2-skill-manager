@@ -75,3 +75,36 @@ class SkillPanel:
             font=('Helvetica', 9))
         self._status_lbl.grid(row=row, column=0, columnspan=4,
                               sticky='w', pady=(8, 0))
+
+    # ── settled-only filter helper ─────────────────────────────────────────
+
+    def build_settled_filter(self, row: int, default: bool = True) -> None:
+        """Add a "settled-only" checkbox + a hidden-count label at `row`.
+
+        "settled" == the depth track's KF estimate has converged (position
+        1σ ≤ kf_settled_std_m), surfaced as the `[L]` tag in the box label.
+        Sets `self.settled_only_var` (BooleanVar, default True) and
+        `self.hidden_var` (StringVar the panel updates with the hidden count).
+        Toggling re-runs `self.refresh()` so the list updates immediately.
+        """
+        self.settled_only_var = tk.BooleanVar(value=default)
+        self.hidden_var = tk.StringVar(value='')
+        fr = ttk.Frame(self.frame)
+        fr.grid(row=row, column=0, columnspan=3, sticky='w', pady=(2, 2))
+        ttk.Checkbutton(
+            fr, text='settled([L])만 보기', variable=self.settled_only_var,
+            command=self.refresh).pack(side=tk.LEFT)
+        ttk.Label(fr, textvariable=self.hidden_var, foreground='#999',
+                  font=('Helvetica', 9)).pack(side=tk.LEFT, padx=(8, 0))
+
+    def settled_only(self) -> bool:
+        """Current toggle state (True if the panel has no toggle = default on)."""
+        var = getattr(self, 'settled_only_var', None)
+        return bool(var.get()) if var is not None else True
+
+    def set_hidden_count(self, hidden: int) -> None:
+        # `hidden` is derived from two non-atomic snapshots (the spin thread may
+        # mutate _cups between them), so clamp: only show a positive count.
+        var = getattr(self, 'hidden_var', None)
+        if var is not None:
+            var.set(f'(미수렴 {hidden}개 숨김)' if hidden > 0 else '')

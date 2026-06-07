@@ -6,7 +6,10 @@ extract per-track:
   • box_labels text   → parses `c=<color>_<class>_…`
 The set of pick candidates is the alive tracks whose CLASS is `upright-cup`
 AND whose id is NOT in the verifier's /stack_track_ids feed (= cups vision
-has already assigned to a stack slot).
+has already assigned to a stack slot).  By default the list is further gated
+to KF-settled tracks only (the `[L]` tag); the "settled([L])만 보기" checkbox
+toggles that gate, and the hidden-count label shows how many unsettled cups
+are being withheld.
 
 Payload:  POST <pick_api_url>  {x, y, cup_top_z = box_top.z + cup_top_z_offset}
 The cup_top_z_offset (default 0.302 m) is the operator-specified bias that
@@ -33,42 +36,52 @@ class PickPanel(SkillPanel):
                   font=('Helvetica', 11, 'bold')).grid(
             row=0, column=0, columnspan=3, sticky='w', pady=(0, 4))
 
+        self.build_settled_filter(row=1)
+
         self.listbox = tk.Listbox(
             f, width=58, height=8, font=('Courier', 10),
             selectmode=tk.SINGLE, activestyle='dotbox')
-        self.listbox.grid(row=1, column=0, columnspan=2, sticky='ew')
+        self.listbox.grid(row=2, column=0, columnspan=2, sticky='ew')
         sb = ttk.Scrollbar(f, orient=tk.VERTICAL,
                            command=self.listbox.yview)
-        sb.grid(row=1, column=2, sticky='ns')
+        sb.grid(row=2, column=2, sticky='ns')
         self.listbox.config(yscrollcommand=sb.set)
 
         btns = ttk.Frame(f)
-        btns.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(6, 0))
+        btns.grid(row=3, column=0, columnspan=3, sticky='ew', pady=(6, 0))
         self.pick_btn = ttk.Button(
             btns, text='▶  Pick selected', command=self._on_pick)
         self.pick_btn.grid(row=0, column=0, padx=(0, 6))
         ttk.Button(btns, text='⟳ Re-scan',
                    command=self.manager.trigger_scan).grid(row=0, column=1)
 
-        self.build_status_row(row=3)
+        self.build_status_row(row=4)
         self._cup_ids: list[int] = []
 
     # ── refresh ───────────────────────────────────────────────────────────
     def refresh(self) -> None:
-        cups = self.manager.standing_candidates()
+        settled_only = self.settled_only()
+        cups = self.manager.standing_candidates(settled_only=settled_only)
+        total = len(self.manager.standing_candidates(settled_only=False))
+        self.set_hidden_count(total - len(cups))
         sel = self.listbox.curselection()
         prev = self._cup_ids[sel[0]] if sel else None
         self.listbox.delete(0, tk.END)
-        self._cup_ids = sorted(cups.keys())
-        for tid in self._cup_ids:
+        # Build _cup_ids only from rows actually inserted so its indices stay
+        # aligned with listbox rows (a skipped row must not shift the mapping).
+        self._cup_ids = []
+        for tid in sorted(cups.keys()):
             c = cups[tid]
-            pos = c['pos']
+            pos = c.get('pos')
+            if pos is None:
+                continue
+            self._cup_ids.append(tid)
             self.listbox.insert(
                 tk.END,
                 f"{'[L]' if c.get('locked') else '   '} "
                 f"#{tid:>3}  {c.get('color', '?'):<8}  "
                 f"({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
-        if prev is not None and prev in cups:
+        if prev is not None and prev in self._cup_ids:
             self.listbox.selection_set(self._cup_ids.index(prev))
 
     # ── action ────────────────────────────────────────────────────────────
@@ -80,11 +93,14 @@ class PickPanel(SkillPanel):
             self.set_status('⚠ select a standing cup first', 'orange')
             return
         tid = self._cup_ids[sel[0]]
-        cups = self.manager.standing_candidates()
+        cups = self.manager.standing_candidates(settled_only=self.settled_only())
         if tid not in cups:
             self.set_status(f'⚠ #{tid} no longer a candidate', 'orange')
             return
-        pos = cups[tid]['pos']
+        pos = cups[tid].get('pos')
+        if pos is None:
+            self.set_status(f'⚠ #{tid} has no position yet', 'orange')
+            return
         offset = self.manager.cup_top_z_offset
         payload = {
             'x':         float(pos[0]),
