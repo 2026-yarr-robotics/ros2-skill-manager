@@ -49,11 +49,12 @@ get past Cloudflare's Browser Integrity Check.
 | `stack_topic` | `/stack` | verifier slot map |
 | `verifier_node` | `cup_occupancy_verifier` | for {get,set}_parameters |
 | `trigger_scan_service` | `/point_cloud_node/trigger_scan` | re-scan button target |
-| `api_url_pick` | `…/api/robot/skill/pick` | Pick POST URL |
-| `api_url_pyramid` | `…/api/robot/skill/pyramid` | Pyramid POST URL |
-| `api_url_update_input` | `…/api/robot/config/pyramid` | GET (pull) + POST (push) on the same path |
-| `api_url_recover` | `''` (stub) | NO endpoint on the server today |
-| `api_url_scan` | `''` (stub) | NO endpoint on the server today |
+| `localhost` | `false` | `true` ⇒ point every skill at `http://localhost/api/robot/…` (port 80) instead of the production API |
+| `api_url_pick` | `''` (derive) | empty ⇒ `<root>/skill/pick` from the `localhost` toggle; set to a full URL to override just this skill |
+| `api_url_pyramid` | `''` (derive) | empty ⇒ `<root>/skill/pyramid` |
+| `api_url_update_input` | `''` (derive) | empty ⇒ `<root>/config/pyramid` (GET pull + POST push) |
+| `api_url_recover` | `''` (stub) | NO endpoint on either server; pass a URL to enable |
+| `api_url_scan` | `''` (stub) | NO endpoint on either server; pass a URL to enable |
 | `api_timeout_s` | `15.0` | per-call HTTP timeout |
 | `cup_top_z_offset` | `0.302` | added to `box_top.z` before sending `cup_top_z` |
 
@@ -66,6 +67,11 @@ ros2 run skill_manager skill_manager
 # or with overrides
 ros2 launch skill_manager skill_manager.launch.py \
     api_url_pyramid:=https://yarr-api.simplyimg.com/api/robot/skill/pyramid
+
+# localhost (port 80) — all skills hit http://localhost/api/robot/…
+ros2 run skill_manager skill_manager --ros-args -p localhost:=true
+# or
+ros2 launch skill_manager skill_manager.launch.py localhost:=true
 ```
 
 Prerequisites (in environment overlay): depth_digital_twin running
