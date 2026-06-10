@@ -93,20 +93,32 @@ class SkillManager(Node):
         self.declare_parameter('verifier_node', 'cup_occupancy_verifier')
         self.declare_parameter(
             'trigger_scan_service', '/point_cloud_node/trigger_scan')
+        # Scan & Lock (cup_fusion_node): toggle scan_lock_active + clear service.
+        self.declare_parameter('fusion_node', 'cup_fusion_node')
+        self.declare_parameter(
+            'clear_scan_service', '/cup_fusion_node/clear_scan')
 
-        # Real endpoints (from https://yarr-api.simplyimg.com/api/robot/openapi.json).
-        # recover / scan endpoints DO NOT EXIST on the server today, so those
-        # two are left blank — RecoverPanel / ScanPanel are stubs that show
-        # candidate data but never POST.
-        _API_ROOT = 'https://yarr-api.simplyimg.com/api/robot'
-        self.declare_parameter(
-            'api_url_pick',         f'{_API_ROOT}/skill/pick')
-        self.declare_parameter(
-            'api_url_pyramid',      f'{_API_ROOT}/skill/pyramid')
-        self.declare_parameter(
-            'api_url_update_input', f'{_API_ROOT}/config/pyramid')
-        self.declare_parameter('api_url_recover', '')   # not exposed by server
-        self.declare_parameter('api_url_scan',    '')   # not exposed by server
+        # Base host root for every skill endpoint (paths from
+        # https://yarr-api.simplyimg.com/api/robot/openapi.json).  Flip
+        # `localhost` to hit a local server on port 80
+        # (http://localhost/api/robot/…) instead of the production API — handy
+        # for on-robot / offline testing without retyping each URL.
+        _PROD_ROOT  = 'https://yarr-api.simplyimg.com/api/robot'
+        _LOCAL_ROOT = 'http://localhost/api/robot'
+        self.declare_parameter('localhost', False)
+        use_localhost = bool(self.get_parameter('localhost').value)
+        api_root = _LOCAL_ROOT if use_localhost else _PROD_ROOT
+
+        # Per-skill URL overrides.  Empty (the default) ⇒ derive from api_root
+        # above, so the `localhost` toggle moves all of them at once; set one
+        # explicitly to pin just that skill to a different host.  recover / scan
+        # endpoints DO NOT EXIST on either server, so they stay blank — pass a
+        # URL to enable them; while blank RecoverPanel / ScanPanel never POST.
+        self.declare_parameter('api_url_pick',         '')
+        self.declare_parameter('api_url_pyramid',      '')
+        self.declare_parameter('api_url_update_input', '')
+        self.declare_parameter('api_url_recover',      '')
+        self.declare_parameter('api_url_scan',         '')
         self.declare_parameter('api_timeout_s', 15.0)
         # Bias applied to box_top.z before sending as cup_top_z (operator spec).
         self.declare_parameter('cup_top_z_offset', 0.302)
@@ -116,14 +128,28 @@ class SkillManager(Node):
         stack_topic = str(self.get_parameter('stack_topic').value)
         verifier = str(self.get_parameter('verifier_node').value).strip('/')
         scan_svc = str(self.get_parameter('trigger_scan_service').value)
+        fusion_node = str(self.get_parameter('fusion_node').value).strip('/')
+        clear_scan_svc = str(self.get_parameter('clear_scan_service').value)
+
+        # Skill → endpoint path under api_root.  '' = no server endpoint (stub).
+        _SKILL_PATHS = {
+            'pick':         '/skill/pick',
+            'pyramid':      '/skill/pyramid',
+            'update_input': '/config/pyramid',
+            'recover':      '',
+            'scan':         '/skill/scan',
+        }
+
+        def _resolve_api_url(skill: str) -> str:
+            override = str(
+                self.get_parameter(f'api_url_{skill}').value).strip()
+            if override:
+                return override
+            path = _SKILL_PATHS[skill]
+            return f'{api_root}{path}' if path else ''
 
         self._api_urls: dict[str, str] = {
-            'pick': str(self.get_parameter('api_url_pick').value),
-            'pyramid': str(self.get_parameter('api_url_pyramid').value),
-            'update_input': str(
-                self.get_parameter('api_url_update_input').value),
-            'recover': str(self.get_parameter('api_url_recover').value),
-            'scan': str(self.get_parameter('api_url_scan').value),
+            s: _resolve_api_url(s) for s in _SKILL_PATHS
         }
         self.api_timeout_s: float = float(
             self.get_parameter('api_timeout_s').value)
@@ -152,12 +178,17 @@ class SkillManager(Node):
             GetParameters, f'/{verifier}/get_parameters')
         self._set_param_cli = self.create_client(
             SetParameters, f'/{verifier}/set_parameters')
+        # Scan & Lock control of the fusion node.
+        self._fusion_set_cli = self.create_client(
+            SetParameters, f'/{fusion_node}/set_parameters')
+        self._clear_scan_cli = self.create_client(Trigger, clear_scan_svc)
 
         # Poll the verifier's cp/degree periodically (catches pose_tuner edits).
         self.create_timer(2.0, self._poll_verifier)
 
         self.get_logger().info(
-            f'skill_manager ready  boxes={boxes_topic}  '
+            f'skill_manager ready  api_root={api_root} '
+            f'(localhost={use_localhost})  boxes={boxes_topic}  '
             f'stack_ids={stack_ids_topic}  stack={stack_topic}  '
             f'verifier=/{verifier}  scan_svc={scan_svc}')
 
@@ -281,6 +312,32 @@ class SkillManager(Node):
             return
         self._scan_cli.call_async(Trigger.Request())
         self.get_logger().info('trigger_scan called')
+
+    def set_scan_lock(self, active: bool) -> bool:
+        """Toggle cup_fusion_node scan_lock_active (True=capture at waypoints,
+        False=pause/keep lock). Returns False if the service is unavailable."""
+        if not self._fusion_set_cli.service_is_ready():
+            self._fusion_set_cli.wait_for_service(timeout_sec=0.5)
+            if not self._fusion_set_cli.service_is_ready():
+                self.get_logger().warn(
+                    'set_scan_lock: fusion param service not available')
+                return False
+        req = SetParameters.Request(parameters=[
+            Parameter(name='scan_lock_active', value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL, bool_value=bool(active)))])
+        self._fusion_set_cli.call_async(req)
+        self.get_logger().info(f'scan_lock_active <- {bool(active)}')
+        return True
+
+    def clear_scan_lock(self) -> bool:
+        """Call cup_fusion_node/clear_scan (Trigger): wipe accumulation + lock,
+        return to live detection. Returns False if the service is unavailable."""
+        if not self._clear_scan_cli.wait_for_service(timeout_sec=0.3):
+            self.get_logger().warn('clear_scan: service not available')
+            return False
+        self._clear_scan_cli.call_async(Trigger.Request())
+        self.get_logger().info('clear_scan called')
+        return True
 
     def apply_verifier_cp_degree(self, cp: list[float], deg: float) -> bool:
         """Push cp+degree to the verifier via SetParameters.  Returns False
