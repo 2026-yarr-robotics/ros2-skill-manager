@@ -2,9 +2,9 @@
 
 Planned flow:  POST <scan_api_url> with {waypoints: [...], dwell_s: 3.0}.
 While the robot dwells, depth_digital_twin's accumulating window scoops up
-extra observations and locks more tracks.  Whether the server emits a "scan
-done" event (so we don't have to poll) is still TBD; the panel keeps the
-action button disabled until both questions are settled.
+extra observations so more tracks converge (settle → [L]).  Whether the
+server emits a "scan done" event (so we don't have to poll) is still TBD;
+the panel keeps the action button disabled until both questions are settled.
 """
 from __future__ import annotations
 

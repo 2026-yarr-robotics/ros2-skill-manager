@@ -50,7 +50,12 @@ _KNOWN_CLASSES = {'upright-cup', 'fallen-cup', 'cup'}
 
 
 def _parse_label(text: str) -> tuple[str, str, bool]:
-    """Extract (color, class_name, locked) from a depth box_labels text.
+    """Extract (color, class_name, settled) from a depth box_labels text.
+
+    The returned bool comes from the "[L]_" prefix. NOTE: since the depth node
+    moved from scan-and-lock to a Kalman filter, "[L]" no longer means the pose
+    is frozen — it means the KF estimate is SETTLED (position 1σ ≤
+    kf_settled_std_m, ~6 mm). It keeps updating; it is not locked in place.
 
     Label format examples:
       "[L]_#7_c=red_upright-cup_0.87_r=12mm_(0.31,0.04,0.18)"
@@ -222,8 +227,15 @@ class SkillManager(Node):
 
     # ── shared-state accessors (panels read these from UI thread) ────────
 
-    def standing_candidates(self) -> dict[int, dict]:
-        """Alive `upright-cup` tracks NOT currently in any stack slot."""
+    def standing_candidates(self, settled_only: bool = True) -> dict[int, dict]:
+        """Alive `upright-cup` tracks NOT currently in any stack slot.
+
+        When `settled_only` (default), also require the depth track's KF
+        estimate to be settled — i.e. the `[L]` tag (position 1σ ≤
+        kf_settled_std_m, ~6 mm) parsed into `locked`. This keeps the robot
+        from acting on a not-yet-converged (high-uncertainty) pose. Pass
+        settled_only=False to include unsettled tracks too.
+        """
         with self._state_lock:
             stacked = set(self._stacked_ids)
             out = {}
@@ -234,16 +246,22 @@ class SkillManager(Node):
                     continue
                 if 'pos' not in c:
                     continue
+                if settled_only and not c.get('locked'):
+                    continue
                 out[tid] = dict(c)
             return out
 
-    def fallen_candidates(self) -> dict[int, dict]:
+    def fallen_candidates(self, settled_only: bool = True) -> dict[int, dict]:
+        """Alive `fallen-cup` tracks. `settled_only` gates on the `[L]`
+        (KF-settled) tag, same as standing_candidates."""
         with self._state_lock:
             out = {}
             for tid, c in self._cups.items():
                 if c.get('class') != 'fallen-cup':
                     continue
                 if 'pos' not in c:
+                    continue
+                if settled_only and not c.get('locked'):
                     continue
                 out[tid] = dict(c)
             return out

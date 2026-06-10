@@ -33,30 +33,38 @@ class RecoverPanel(SkillPanel):
                   font=('Helvetica', 9), foreground='#666').grid(
             row=1, column=0, columnspan=2, sticky='w', pady=(2, 6))
 
+        self.build_settled_filter(row=2)
+
         self.listbox = tk.Listbox(
             f, width=58, height=6, font=('Courier', 10),
             selectmode=tk.SINGLE, activestyle='dotbox')
-        self.listbox.grid(row=2, column=0, sticky='ew')
+        self.listbox.grid(row=3, column=0, sticky='ew')
         sb = ttk.Scrollbar(f, orient=tk.VERTICAL,
                            command=self.listbox.yview)
-        sb.grid(row=2, column=1, sticky='ns')
+        sb.grid(row=3, column=1, sticky='ns')
         self.listbox.config(yscrollcommand=sb.set)
 
         btn = ttk.Button(f, text='▶  Recover selected (NOT IMPLEMENTED)',
                          command=self._on_recover, state='disabled')
-        btn.grid(row=3, column=0, sticky='w', pady=(6, 0))
+        btn.grid(row=4, column=0, sticky='w', pady=(6, 0))
 
-        self.build_status_row(row=4)
+        self.build_status_row(row=5)
         self.set_status('stub: action button intentionally disabled.', 'gray')
 
     def refresh(self) -> None:
-        cups = self.manager.fallen_candidates()
+        settled_only = self.settled_only()
+        cups = self.manager.fallen_candidates(settled_only=settled_only)
+        total = len(self.manager.fallen_candidates(settled_only=False))
+        self.set_hidden_count(total - len(cups))
         self.listbox.delete(0, tk.END)
         for tid in sorted(cups.keys()):
             c = cups[tid]
-            p = c['pos']
+            p = c.get('pos')
+            if p is None:
+                continue
             self.listbox.insert(
                 tk.END,
+                f"{'[L]' if c.get('locked') else '   '} "
                 f"#{tid:>3}  {c.get('color', '?'):<8}  "
                 f"({p[0]:+.3f}, {p[1]:+.3f}, {p[2]:+.3f})")
 

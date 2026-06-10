@@ -38,59 +38,69 @@ class PyramidPanel(SkillPanel):
         ttk.Label(f, text='Source cup (upright, not stacked)',
                   font=('Helvetica', 11, 'bold')).grid(
             row=0, column=0, columnspan=3, sticky='w')
+        self.build_settled_filter(row=1)
         self.listbox = tk.Listbox(
             f, width=58, height=6, font=('Courier', 10),
             selectmode=tk.SINGLE, activestyle='dotbox')
-        self.listbox.grid(row=1, column=0, columnspan=2, sticky='ew')
+        self.listbox.grid(row=2, column=0, columnspan=2, sticky='ew')
         sb = ttk.Scrollbar(f, orient=tk.VERTICAL,
                            command=self.listbox.yview)
-        sb.grid(row=1, column=2, sticky='ns')
+        sb.grid(row=2, column=2, sticky='ns')
         self.listbox.config(yscrollcommand=sb.set)
 
         # ── target slot picker ─────────────────────────────────────────
         ttk.Label(f, text='Target slot', font=('Helvetica', 11, 'bold')).grid(
-            row=2, column=0, sticky='w', pady=(8, 0))
+            row=3, column=0, sticky='w', pady=(8, 0))
         self.slot_var = tk.StringVar(value='L1_L')
         self.slot_cb = ttk.Combobox(
             f, textvariable=self.slot_var,
             values=_SLOT_ORDER, state='readonly', width=10)
-        self.slot_cb.grid(row=2, column=1, sticky='w', pady=(8, 0))
+        self.slot_cb.grid(row=3, column=1, sticky='w', pady=(8, 0))
         self.slot_info = tk.StringVar(value='slot status: …')
         ttk.Label(f, textvariable=self.slot_info,
                   font=('Helvetica', 9), foreground='gray').grid(
-            row=3, column=0, columnspan=3, sticky='w')
+            row=4, column=0, columnspan=3, sticky='w')
 
         # ── geometry display (cp/degree read-only) ─────────────────────
         self.geom_info = tk.StringVar(value='cp/degree: pending verifier…')
         ttk.Label(f, textvariable=self.geom_info,
                   font=('Courier', 9), foreground='#444').grid(
-            row=4, column=0, columnspan=3, sticky='w', pady=(8, 0))
+            row=5, column=0, columnspan=3, sticky='w', pady=(8, 0))
 
         # ── action ─────────────────────────────────────────────────────
         ttk.Button(f, text='▶  Place at selected slot',
                    command=self._on_place).grid(
-            row=5, column=0, sticky='w', pady=(8, 0))
+            row=6, column=0, sticky='w', pady=(8, 0))
 
         self.slot_cb.bind('<<ComboboxSelected>>', lambda *_: self.refresh())
-        self.build_status_row(row=6)
+        self.build_status_row(row=7)
         self._cup_ids: list[int] = []
 
     # ── refresh ───────────────────────────────────────────────────────────
     def refresh(self) -> None:
         # standing cups list
-        cups = self.manager.standing_candidates()
+        settled_only = self.settled_only()
+        cups = self.manager.standing_candidates(settled_only=settled_only)
+        total = len(self.manager.standing_candidates(settled_only=False))
+        self.set_hidden_count(total - len(cups))
         sel = self.listbox.curselection()
         prev = self._cup_ids[sel[0]] if sel else None
         self.listbox.delete(0, tk.END)
-        self._cup_ids = sorted(cups.keys())
-        for tid in self._cup_ids:
+        # Build _cup_ids only from rows actually inserted so its indices stay
+        # aligned with listbox rows (a skipped row must not shift the mapping).
+        self._cup_ids = []
+        for tid in sorted(cups.keys()):
             c = cups[tid]
-            p = c['pos']
+            p = c.get('pos')
+            if p is None:
+                continue
+            self._cup_ids.append(tid)
             self.listbox.insert(
                 tk.END,
+                f"{'[L]' if c.get('locked') else '   '} "
                 f"#{tid:>3}  {c.get('color', '?'):<8}  "
                 f"({p[0]:+.3f}, {p[1]:+.3f}, {p[2]:+.3f})")
-        if prev is not None and prev in cups:
+        if prev is not None and prev in self._cup_ids:
             self.listbox.selection_set(self._cup_ids.index(prev))
 
         # slot status from /stack
@@ -126,11 +136,14 @@ class PyramidPanel(SkillPanel):
             self.set_status(f'⚠ invalid slot {slot!r}', 'orange')
             return
         tid = self._cup_ids[sel[0]]
-        cups = self.manager.standing_candidates()
+        cups = self.manager.standing_candidates(settled_only=self.settled_only())
         if tid not in cups:
             self.set_status(f'⚠ #{tid} no longer a candidate', 'orange')
             return
-        pos = cups[tid]['pos']
+        pos = cups[tid].get('pos')
+        if pos is None:
+            self.set_status(f'⚠ #{tid} has no position yet', 'orange')
+            return
         api_slot = api_client.SLOT_KEY_TO_API.get(slot)
         if api_slot is None:
             self.set_status(
