@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -38,6 +39,16 @@ from skill_manager.skills.pyramid import PyramidPanel
 from skill_manager.skills.update_input import UpdateInputPanel
 from skill_manager.skills.recover import RecoverPanel
 from skill_manager.skills.scan import ScanPanel
+from skill_manager.skills.move import MovePanel
+
+# HOME goes through the Doosan MoveJoint service directly (the REST API has
+# no joint-move endpoint). dsr_msgs2 is only on the path when a doosan
+# workspace is sourced (run_skill_manager.sh does this when one is found);
+# degrade gracefully to a disabled Home button otherwise.
+try:
+    from dsr_msgs2.srv import MoveJoint
+except ImportError:  # pragma: no cover - environment-dependent
+    MoveJoint = None
 
 
 # Color tokens depth_digital_twin writes into the box_labels text.  Kept in
@@ -65,14 +76,19 @@ def _parse_label(text: str) -> tuple[str, str, bool]:
         return 'unknown', 'unknown', False
     locked = text.startswith('[L]')
     color, cls = 'unknown', 'unknown'
-    for tok in text.replace('\n', '_').split('_'):
+    # Tolerant tokenizer: legacy `#7_c=red_upright-cup_0.87` AND label v2
+    # `[F] [S] #7 red cup(0.305, 0.400, 0.075)` ([F]=fused, [S]=scan).
+    for tok in re.split(r'[\s_]+', text.replace('\n', ' ')):
         t = tok.strip().lower()
         if t.startswith('c=') and t[2:] in _KNOWN_COLORS:
             color = t[2:]
         elif t in _KNOWN_COLORS and color == 'unknown':
             color = t
-        if t in _KNOWN_CLASSES:
-            cls = t
+        base = t.split('(')[0]          # 'fallen-cup(0.1,' → 'fallen-cup'
+        if base in _KNOWN_CLASSES:
+            cls = base
+        elif cls == 'unknown' and base == 'cup':
+            cls = 'upright-cup'      # label v2 display class
     return color, cls, locked
 
 
@@ -80,7 +96,7 @@ def _parse_label(text: str) -> tuple[str, str, bool]:
 
 class SkillManager(Node):
     SKILL_CLASSES = [PickPanel, PyramidPanel, UpdateInputPanel,
-                     RecoverPanel, ScanPanel]
+                     RecoverPanel, ScanPanel, MovePanel]
 
     def __init__(self) -> None:
         super().__init__('skill_manager')
@@ -111,15 +127,26 @@ class SkillManager(Node):
 
         # Per-skill URL overrides.  Empty (the default) ⇒ derive from api_root
         # above, so the `localhost` toggle moves all of them at once; set one
-        # explicitly to pin just that skill to a different host.  recover / scan
-        # endpoints DO NOT EXIST on either server, so they stay blank — pass a
-        # URL to enable them; while blank RecoverPanel / ScanPanel never POST.
+        # explicitly to pin just that skill to a different host (NOTE:
+        # run_skill_manager.sh pins EVERY endpoint to ROBOT_API_BASE this way
+        # — a skill missing there silently falls back to the Cloudflare PROD
+        # host, which times out on long motions).  The recover endpoint does
+        # not exist on either server, so it stays blank — while blank
+        # RecoverPanel never POSTs.
         self.declare_parameter('api_url_pick',         '')
         self.declare_parameter('api_url_pyramid',      '')
         self.declare_parameter('api_url_update_input', '')
         self.declare_parameter('api_url_recover',      '')
         self.declare_parameter('api_url_scan',         '')
+        self.declare_parameter('api_url_move',         '')
+        self.declare_parameter('api_url_position',     '')
         self.declare_parameter('api_timeout_s', 15.0)
+        # HOME (move skill): Doosan MoveJoint service + the yarr_home pose.
+        self.declare_parameter(
+            'move_joint_service', '/dsr01/motion/move_joint')
+        self.declare_parameter(
+            'home_joints', [0.0, 0.0, 90.0, 0.0, 90.0, 90.0])
+        self.declare_parameter('home_vel_acc', 40.0)
         # Bias applied to box_top.z before sending as cup_top_z (operator spec).
         self.declare_parameter('cup_top_z_offset', 0.302)
 
@@ -132,12 +159,16 @@ class SkillManager(Node):
         clear_scan_svc = str(self.get_parameter('clear_scan_service').value)
 
         # Skill → endpoint path under api_root.  '' = no server endpoint (stub).
+        # 'position' is not a skill — it is the GET endpoint the move panel
+        # uses to prefill x/y/z; it rides the same URL-resolution machinery.
         _SKILL_PATHS = {
             'pick':         '/skill/pick',
             'pyramid':      '/skill/pyramid',
             'update_input': '/config/pyramid',
             'recover':      '',
             'scan':         '/skill/scan',
+            'move':         '/move',
+            'position':     '/position',
         }
 
         def _resolve_api_url(skill: str) -> str:
@@ -182,6 +213,13 @@ class SkillManager(Node):
         self._fusion_set_cli = self.create_client(
             SetParameters, f'/{fusion_node}/set_parameters')
         self._clear_scan_cli = self.create_client(Trigger, clear_scan_svc)
+        # HOME via Doosan MoveJoint (move skill) — only when dsr_msgs2 is
+        # importable; otherwise the Home button stays disabled.
+        self._move_joint_cli = None
+        if MoveJoint is not None:
+            self._move_joint_cli = self.create_client(
+                MoveJoint,
+                str(self.get_parameter('move_joint_service').value))
 
         # Poll the verifier's cp/degree periodically (catches pose_tuner edits).
         self.create_timer(2.0, self._poll_verifier)
@@ -338,6 +376,53 @@ class SkillManager(Node):
         self._clear_scan_cli.call_async(Trigger.Request())
         self.get_logger().info('clear_scan called')
         return True
+
+    def home_available(self) -> bool:
+        """True when dsr_msgs2 was importable (Home button usable)."""
+        return self._move_joint_cli is not None
+
+    def go_home(self) -> bool:
+        """Move to HOME [0,0,90,0,90,90] deg via /dsr01/motion/move_joint —
+        the same call as the operator `yarr_home` alias (pulls a virtual
+        robot out of the [0,…,0] boot singularity). Returns False if the
+        service is unavailable; the result lands on the move panel's status
+        via queue_status."""
+        if self._move_joint_cli is None:
+            self.get_logger().warn('go_home: dsr_msgs2 not available')
+            return False
+        if not self._move_joint_cli.service_is_ready():
+            self._move_joint_cli.wait_for_service(timeout_sec=0.5)
+            if not self._move_joint_cli.service_is_ready():
+                self.get_logger().warn(
+                    'go_home: move_joint service not available')
+                return False
+        vel_acc = float(self.get_parameter('home_vel_acc').value)
+        req = MoveJoint.Request()
+        req.pos = [float(v) for v in
+                   self.get_parameter('home_joints').value]
+        req.vel = vel_acc
+        req.acc = vel_acc
+        req.time = 0.0
+        req.radius = 0.0
+        req.mode = 0
+        req.blend_type = 0
+        req.sync_type = 0
+        self.get_logger().info(f'[MOVE] HOME → move_joint {req.pos}')
+        fut = self._move_joint_cli.call_async(req)
+        fut.add_done_callback(self._on_home_done)
+        return True
+
+    def _on_home_done(self, fut) -> None:
+        try:
+            resp = fut.result()
+        except Exception as e:  # noqa: BLE001
+            self.queue_status('move', f'✗ home service error: {e!r}',
+                              '#cc0000')
+            return
+        ok = bool(getattr(resp, 'success', True))
+        self.queue_status(
+            'move', '✓ HOME OK' if ok else '✗ HOME move_joint FAILED',
+            '#2a7a2a' if ok else '#cc0000')
 
     def apply_verifier_cp_degree(self, cp: list[float], deg: float) -> bool:
         """Push cp+degree to the verifier via SetParameters.  Returns False
