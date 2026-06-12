@@ -38,7 +38,6 @@ class PyramidPanel(SkillPanel):
         ttk.Label(f, text='Source cup (upright, not stacked)',
                   font=('Helvetica', 11, 'bold')).grid(
             row=0, column=0, columnspan=3, sticky='w')
-        self.build_settled_filter(row=1)
         self.listbox = tk.Listbox(
             f, width=58, height=6, font=('Courier', 10),
             selectmode=tk.SINGLE, activestyle='dotbox')
@@ -97,7 +96,6 @@ class PyramidPanel(SkillPanel):
             self._cup_ids.append(tid)
             self.listbox.insert(
                 tk.END,
-                f"{'[L]' if c.get('locked') else '   '} "
                 f"#{tid:>3}  {c.get('color', '?'):<8}  "
                 f"({p[0]:+.3f}, {p[1]:+.3f}, {p[2]:+.3f})")
         if prev is not None and prev in self._cup_ids:

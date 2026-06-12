@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class SkillPanel:
-    name: str = ''        # 'pick' | 'pyramid' | 'update_input' | 'recover' | 'scan'
+    name: str = ''        # 'pick' | 'pyramid' | 'update_input' | 'recover' | 'scan' | 'move'
     label: str = ''       # human-readable for the radio button
     stub: bool = False    # True → panel shows a placeholder, no action
 
@@ -98,9 +98,11 @@ class SkillPanel:
                   font=('Helvetica', 9)).pack(side=tk.LEFT, padx=(8, 0))
 
     def settled_only(self) -> bool:
-        """Current toggle state (True if the panel has no toggle = default on)."""
+        """Current toggle state. Default FALSE: the depth [L] (settled) tag
+        is retired (label v2 — [F]/[S] meta instead), so gating on it would
+        hide every cup."""
         var = getattr(self, 'settled_only_var', None)
-        return bool(var.get()) if var is not None else True
+        return bool(var.get()) if var is not None else False
 
     def set_hidden_count(self, hidden: int) -> None:
         # `hidden` is derived from two non-atomic snapshots (the spin thread may

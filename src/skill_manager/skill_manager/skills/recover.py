@@ -33,7 +33,6 @@ class RecoverPanel(SkillPanel):
                   font=('Helvetica', 9), foreground='#666').grid(
             row=1, column=0, columnspan=2, sticky='w', pady=(2, 6))
 
-        self.build_settled_filter(row=2)
 
         self.listbox = tk.Listbox(
             f, width=58, height=6, font=('Courier', 10),

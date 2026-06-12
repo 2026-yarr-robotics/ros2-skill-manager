@@ -296,7 +296,7 @@ class SkillManager(Node):
 
     # ── shared-state accessors (panels read these from UI thread) ────────
 
-    def standing_candidates(self, settled_only: bool = True) -> dict[int, dict]:
+    def standing_candidates(self, settled_only: bool = False) -> dict[int, dict]:
         """Alive `upright-cup` tracks NOT currently in any stack slot.
 
         When `settled_only` (default), also require the depth track's KF
@@ -320,7 +320,7 @@ class SkillManager(Node):
                 out[tid] = dict(c)
             return out
 
-    def fallen_candidates(self, settled_only: bool = True) -> dict[int, dict]:
+    def fallen_candidates(self, settled_only: bool = False) -> dict[int, dict]:
         """Alive `fallen-cup` tracks. `settled_only` gates on the `[L]`
         (KF-settled) tag, same as standing_candidates."""
         with self._state_lock:
