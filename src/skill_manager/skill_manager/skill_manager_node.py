@@ -34,6 +34,7 @@ from std_msgs.msg import Int32MultiArray, String
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 
+from skill_manager.skills.agent import AgentPanel
 from skill_manager.skills.pick import PickPanel
 from skill_manager.skills.pyramid import PyramidPanel
 from skill_manager.skills.update_input import UpdateInputPanel
@@ -96,7 +97,7 @@ def _parse_label(text: str) -> tuple[str, str, bool]:
 
 class SkillManager(Node):
     SKILL_CLASSES = [PickPanel, PyramidPanel, UpdateInputPanel,
-                     RecoverPanel, ScanPanel, MovePanel]
+                     RecoverPanel, ScanPanel, MovePanel, AgentPanel]
 
     def __init__(self) -> None:
         super().__init__('skill_manager')
@@ -141,6 +142,11 @@ class SkillManager(Node):
         self.declare_parameter('api_url_move',         '')
         self.declare_parameter('api_url_position',     '')
         self.declare_parameter('api_url_status',       '')
+        self.declare_parameter('api_url_agent',        '')
+        # agent 루프 로그 소스 — api_root 가 아니라 호스트 bringup 에이전트
+        # (:8099/agent/log) 직결이라 전체 URL 기본값을 따로 둔다.
+        self.declare_parameter('api_url_agent_log',
+                               'http://localhost:8099/agent/log')
         self.declare_parameter('api_timeout_s', 15.0)
         # HOME (move skill): Doosan MoveJoint service + the yarr_home pose.
         self.declare_parameter(
@@ -171,6 +177,7 @@ class SkillManager(Node):
             'move':         '/move',
             'position':     '/position',
             'status':       '/status',
+            'agent':        '/command',
         }
 
         def _resolve_api_url(skill: str) -> str:
@@ -184,6 +191,9 @@ class SkillManager(Node):
         self._api_urls: dict[str, str] = {
             s: _resolve_api_url(s) for s in _SKILL_PATHS
         }
+        # api_root 외부 소스 (기본값이 풀 URL — _SKILL_PATHS 머신리 밖)
+        self._api_urls['agent_log'] = str(
+            self.get_parameter('api_url_agent_log').value).strip()
         self.api_timeout_s: float = float(
             self.get_parameter('api_timeout_s').value)
         self.cup_top_z_offset: float = float(

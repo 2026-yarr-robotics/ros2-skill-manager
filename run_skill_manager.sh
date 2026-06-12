@@ -52,4 +52,5 @@ exec ros2 run skill_manager skill_manager --ros-args \
   -p api_url_move:="${ROBOT_API_BASE}/api/robot/move" \
   -p api_url_position:="${ROBOT_API_BASE}/api/robot/position" \
   -p api_url_status:="${ROBOT_API_BASE}/api/robot/status" \
+  -p api_url_agent:="${ROBOT_API_BASE}/api/robot/command" \
   -p api_timeout_s:="${API_TIMEOUT_S}"
