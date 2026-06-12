@@ -41,12 +41,15 @@ echo "[skill-manager] WARNING: do NOT press Pick/Pyramid while ./start.sh --real
 
 # Every endpoint is pinned to ROBOT_API_BASE: an api_url_* left blank silently
 # falls back to the node's Cloudflare PROD default, which times out on long
-# motions (this is exactly how scan used to break). The node declares all six.
+# motions (this is exactly how scan used to break). The node declares all
+# eight (recover = fallen-cup async task; status = its completion poll).
 exec ros2 run skill_manager skill_manager --ros-args \
   -p api_url_pick:="${ROBOT_API_BASE}/api/robot/skill/pick" \
   -p api_url_pyramid:="${ROBOT_API_BASE}/api/robot/skill/pyramid" \
   -p api_url_update_input:="${ROBOT_API_BASE}/api/robot/config/pyramid" \
+  -p api_url_recover:="${ROBOT_API_BASE}/api/robot/fallen-cup/recovery" \
   -p api_url_scan:="${ROBOT_API_BASE}/api/robot/skill/scan" \
   -p api_url_move:="${ROBOT_API_BASE}/api/robot/move" \
   -p api_url_position:="${ROBOT_API_BASE}/api/robot/position" \
+  -p api_url_status:="${ROBOT_API_BASE}/api/robot/status" \
   -p api_timeout_s:="${API_TIMEOUT_S}"

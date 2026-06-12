@@ -130,9 +130,9 @@ class SkillManager(Node):
         # explicitly to pin just that skill to a different host (NOTE:
         # run_skill_manager.sh pins EVERY endpoint to ROBOT_API_BASE this way
         # — a skill missing there silently falls back to the Cloudflare PROD
-        # host, which times out on long motions).  The recover endpoint does
-        # not exist on either server, so it stays blank — while blank
-        # RecoverPanel never POSTs.
+        # host, which times out on long motions).  'status' is not a skill —
+        # it is the async-task poll endpoint RecoverPanel uses; like
+        # 'position' it rides the same URL-resolution machinery.
         self.declare_parameter('api_url_pick',         '')
         self.declare_parameter('api_url_pyramid',      '')
         self.declare_parameter('api_url_update_input', '')
@@ -140,6 +140,7 @@ class SkillManager(Node):
         self.declare_parameter('api_url_scan',         '')
         self.declare_parameter('api_url_move',         '')
         self.declare_parameter('api_url_position',     '')
+        self.declare_parameter('api_url_status',       '')
         self.declare_parameter('api_timeout_s', 15.0)
         # HOME (move skill): Doosan MoveJoint service + the yarr_home pose.
         self.declare_parameter(
@@ -165,10 +166,11 @@ class SkillManager(Node):
             'pick':         '/skill/pick',
             'pyramid':      '/skill/pyramid',
             'update_input': '/config/pyramid',
-            'recover':      '',
+            'recover':      '/fallen-cup/recovery',
             'scan':         '/skill/scan',
             'move':         '/move',
             'position':     '/position',
+            'status':       '/status',
         }
 
         def _resolve_api_url(skill: str) -> str:
