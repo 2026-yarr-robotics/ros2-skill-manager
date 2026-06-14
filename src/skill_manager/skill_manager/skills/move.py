@@ -66,8 +66,13 @@ class MovePanel(SkillPanel):
         self.home_btn = ttk.Button(btns, text='⌂  Home (0,0,90,0,90,90)',
                                    command=self._on_home)
         self.home_btn.grid(row=0, column=2, padx=6)
+        # SCAN-HOME: vision 자동 검출 위치(cup_fusion scan_home_xyz)로 이동
+        self.scan_btn = ttk.Button(btns, text='⌖  Scan Home (검출 위치)',
+                                   command=self._on_scan_home)
+        self.scan_btn.grid(row=0, column=3, padx=6)
         if not self.manager.home_available():
             self.home_btn.state(['disabled'])
+            self.scan_btn.state(['disabled'])
 
         self.build_status_row(row=5)
         if self.manager.home_available():
@@ -175,6 +180,16 @@ class MovePanel(SkillPanel):
             return
         if self.manager.go_home():
             self.set_status('→ HOME (move_joint [0,0,90,0,90,90])…',
+                            '#0055cc')
+        else:
+            self.set_status('✗ move_joint service unavailable '
+                            '(bringup down?)', '#cc0000')
+
+    def _on_scan_home(self) -> None:
+        if not self.guard_active():
+            return
+        if self.manager.go_scan_home():
+            self.set_status('→ SCAN-HOME (검출 위치, move_joint 관절각)…',
                             '#0055cc')
         else:
             self.set_status('✗ move_joint service unavailable '

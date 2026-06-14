@@ -154,6 +154,13 @@ class SkillManager(Node):
         self.declare_parameter(
             'home_joints', [0.0, 0.0, 90.0, 0.0, 90.0, 90.0])
         self.declare_parameter('home_vel_acc', 40.0)
+        # SCAN-HOME (vision 검증용): cup_fusion 의 scan_home_xyz 와 같은 EE
+        # 자세. 손목각이 bringup 기본과 달라(파이프라인 cartesian 매칭의 이유)
+        # cartesian 이 아닌 measured 관절각으로 이동해야 정확히 재현된다
+        # (params.yaml scan_home_xyz 주석, 2026-06-13 측정).
+        self.declare_parameter(
+            'scan_home_joints',
+            [-2.84, -14.92, 88.48, -2.96, 107.60, 86.61])
         # Bias applied to box_top.z before sending as cup_top_z (operator spec).
         self.declare_parameter('cup_top_z_offset', 0.302)
 
@@ -399,19 +406,29 @@ class SkillManager(Node):
         robot out of the [0,…,0] boot singularity). Returns False if the
         service is unavailable; the result lands on the move panel's status
         via queue_status."""
+        return self._move_joints(
+            self.get_parameter('home_joints').value, 'HOME')
+
+    def go_scan_home(self) -> bool:
+        """Move to SCAN-HOME (cup_fusion scan_home_xyz EE pose) via measured
+        joints — vision 검증용 자동 검출 위치. cartesian 이 아닌 관절각이라
+        손목 자세까지 정확히 재현."""
+        return self._move_joints(
+            self.get_parameter('scan_home_joints').value, 'SCAN-HOME')
+
+    def _move_joints(self, joints, label: str) -> bool:
         if self._move_joint_cli is None:
-            self.get_logger().warn('go_home: dsr_msgs2 not available')
+            self.get_logger().warn(f'{label}: dsr_msgs2 not available')
             return False
         if not self._move_joint_cli.service_is_ready():
             self._move_joint_cli.wait_for_service(timeout_sec=0.5)
             if not self._move_joint_cli.service_is_ready():
                 self.get_logger().warn(
-                    'go_home: move_joint service not available')
+                    f'{label}: move_joint service not available')
                 return False
         vel_acc = float(self.get_parameter('home_vel_acc').value)
         req = MoveJoint.Request()
-        req.pos = [float(v) for v in
-                   self.get_parameter('home_joints').value]
+        req.pos = [float(v) for v in joints]
         req.vel = vel_acc
         req.acc = vel_acc
         req.time = 0.0
@@ -419,21 +436,22 @@ class SkillManager(Node):
         req.mode = 0
         req.blend_type = 0
         req.sync_type = 0
-        self.get_logger().info(f'[MOVE] HOME → move_joint {req.pos}')
+        self.get_logger().info(f'[MOVE] {label} → move_joint {req.pos}')
         fut = self._move_joint_cli.call_async(req)
-        fut.add_done_callback(self._on_home_done)
+        fut.add_done_callback(
+            lambda f, lbl=label: self._on_movej_done(f, lbl))
         return True
 
-    def _on_home_done(self, fut) -> None:
+    def _on_movej_done(self, fut, label: str) -> None:
         try:
             resp = fut.result()
         except Exception as e:  # noqa: BLE001
-            self.queue_status('move', f'✗ home service error: {e!r}',
+            self.queue_status('move', f'✗ {label} service error: {e!r}',
                               '#cc0000')
             return
         ok = bool(getattr(resp, 'success', True))
         self.queue_status(
-            'move', '✓ HOME OK' if ok else '✗ HOME move_joint FAILED',
+            'move', f'✓ {label} OK' if ok else f'✗ {label} move_joint FAILED',
             '#2a7a2a' if ok else '#cc0000')
 
     def apply_verifier_cp_degree(self, cp: list[float], deg: float) -> bool:
